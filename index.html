@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>語彙学習</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, sans-serif; background: #fff; color: #111; padding: 20px 16px; }
+  .lang-row { display: flex; gap: 8px; margin-bottom: 16px; }
+  .lang-btn { flex: 1; padding: 8px 4px; font-size: 13px; border: 1px solid #ddd; border-radius: 8px; background: #fff; cursor: pointer; }
+  .lang-btn.on { background: #111; color: #fff; border-color: #111; }
+  .search-row { display: flex; gap: 8px; margin-bottom: 20px; }
+  #word-input { flex: 1; padding: 10px 12px; font-size: 15px; border: 1px solid #ddd; border-radius: 8px; }
+  #search-btn { padding: 10px 18px; font-size: 14px; background: #111; color: #fff; border: none; border-radius: 8px; cursor: pointer; white-space: nowrap; }
+  #search-btn:disabled { background: #aaa; }
+  .card { border: 1px solid #eee; border-radius: 12px; overflow: hidden; margin-bottom: 20px; }
+  .img-area { height: 160px; background: #f5f5f5; display: flex; align-items: center; justify-content: center; overflow: hidden; }
+  .img-area svg { width: 100%; height: 160px; }
+  .card-body { padding: 16px; }
+  .word-line { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 6px; }
+  .word-main { font-size: 22px; font-weight: 600; }
+  .word-pron { font-size: 13px; color: #666; }
+  .lang-badge { font-size: 11px; padding: 2px 8px; background: #f0f0f0; border-radius: 4px; color: #666; }
+  .definition { font-size: 13px; color: #555; line-height: 1.6; margin-bottom: 14px; }
+  .ex-label { font-size: 11px; color: #aaa; letter-spacing: 0.05em; margin-bottom: 8px; }
+  .ex-item { border-left: 2px solid #ddd; padding-left: 12px; margin-bottom: 10px; }
+  .ex-lang { font-size: 11px; color: #aaa; margin-bottom: 2px; }
+  .ex-text { font-size: 14px; line-height: 1.7; }
+  .error { font-size: 13px; color: #c00; margin-bottom: 16px; }
+  .hist-label { font-size: 11px; color: #aaa; margin-bottom: 8px; }
+  .hist-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip { padding: 4px 12px; font-size: 13px; border: 1px solid #ddd; border-radius: 20px; background: #fff; cursor: pointer; }
+  .hint { font-size: 13px; color: #aaa; text-align: center; padding: 20px 0; }
+  .img-placeholder { font-size: 12px; color: #aaa; }
+</style>
+</head>
+<body>
+<div class="lang-row">
+  <button class="lang-btn on" onclick="setLang('en',this)">🇬🇧 English</button>
+  <button class="lang-btn" onclick="setLang('zh',this)">🇨🇳 中文</button>
+  <button class="lang-btn" onclick="setLang('fr',this)">🇫🇷 Français</button>
+</div>
+<div class="search-row">
+  <input id="word-input" type="text" placeholder="e.g. serendipity" />
+  <button id="search-btn" onclick="doSearch()">調べる</button>
+</div>
+<div id="error-area"></div>
+<div id="card-area"><p class="hint">単語を入力して「調べる」を押してください</p></div>
+<div id="hist-area"></div>
+<script>
+let lang = 'en';
+let history = [];
+const flags = { en:'🇬🇧', zh:'🇨🇳', fr:'🇫🇷' };
+const names = { en:'English', zh:'中文', fr:'Français' };
+const ph = { en:'e.g. serendipity', zh:'例：缘分', fr:'ex : flâner' };
+function setLang(code, btn) {
+  lang = code;
+  document.querySelectorAll('.lang-btn').forEach(b => b.classList.remove('on'));
+  btn.classList.add('on');
+  document.getElementById('word-input').placeholder = ph[code];
+}
+document.getElementById('word-input').addEventListener('keydown', e => {
+  if (e.key === 'Enter') doSearch();
+});
+async function callClaude(msg, max) {
+  const r = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: 'claude-sonnet-4-6',
+      max_tokens: max || 600,
+      messages: [{ role: 'user', content: msg }]
+    })
+  });
+  if (!r.ok) throw new Error('API ' + r.status);
+  const d = await r.json();
+  return d.content.map(b => b.text || '').join('');
+}
+function buildPrompt(word) {
+  const langInstructions = { en: `English word: "${word}"`, zh: `Chinese word: "${word}"`, fr: `French word: "${word}"` };
+  const defLang = { en: 'English', zh: '中文', fr: 'français' };
+  return `${langInstructions[lang]}. Return ONLY valid JSON, no markdown:
+{"pronunciation":"pronunciation guide","definition":"short definition in ${defLang[lang]}","sentences":[{"lang":"${names[lang]}","text":"natural example sentence"},{"lang":"日本語","text":"自然な日本語例文"}],"svg":"<svg viewBox='0 0 400 160' xmlns='http://www.w3.org/2000/svg'><!-- simple flat illustration of ${word} using basic shapes. Use 4-6 shapes max. Vivid colors. No text elements. --></svg>"}`;
+}
+async function doSearch() {
+  const word = document.getElementById('word-input').value.trim();
+  if (!word) return;
+  const btn = document.getElementById('search-btn');
+  btn.disabled = true; btn.textContent = '生成中…';
+  document.getElementById('error-area').innerHTML = '';
+  document.getElementById('card-area').innerHTML = '<p class="hint">生成中…</p>';
+  try {
+    const raw = await callClaude(buildPrompt(word), 900);
+    const json = JSON.parse(raw.replace(/```json|```/g, '').trim());
+    renderCard(word, json);
+    addHistory(word, lang);
+  } catch(e) {
+    document.getElementById('error-area').innerHTML = '<p class="error">取得に失敗しました。もう一度お試しください。</p>';
+    document.getElementById('card-area').innerHTML = '';
+  }
+  btn.disabled = false; btn.textContent = '調べる';
+}
+function renderCard(word, json) {
+  const svgCode = json.svg || '';
+  const exHtml = (json.sentences || []).map(s =>
+    `<div class="ex-item"><p class="ex-lang">${s.lang}</p><p class="ex-text">${s.text}</p></div>`
+  ).join('');
+  document.getElementById('card-area').innerHTML = `
+    <div class="card">
+      <div class="img-area">${svgCode ? `<div style="width:100%;height:160px;overflow:hidden">${svgCode}</div>` : `<p class="img-placeholder">イメージなし</p>`}</div>
+      <div class="card-body">
+        <div class="word-line">
+          <span class="word-main">${word}</span>
+          <span class="word-pron">${json.pronunciation || ''}</span>
+          <span class="lang-badge">${flags[lang]} ${names[lang]}</span>
+        </div>
+        <p class="definition">${json.definition || ''}</p>
+        <p class="ex-label">例文</p>${exHtml}
+      </div>
+    </div>`;
+}
+function addHistory(word, l) {
+  if (history.find(h => h.word === word && h.lang === l)) return;
+  history.unshift({ word, lang: l });
+  if (history.length > 12) history = history.slice(0, 12);
+  const chips = history.map(h => `<button class="chip" onclick="loadHist('${h.word}','${h.lang}')">${flags[h.lang]} ${h.word}</button>`).join('');
+  document.getElementById('hist-area').innerHTML = `<p class="hist-label">履歴</p><div class="hist-chips">${chips}</div>`;
+}
+function loadHist(word, l) {
+  document.getElementById('word-input').value = word;
+  lang = l;
+  document.querySelectorAll('.lang-btn').forEach((b, i) => b.classList.toggle('on', ['en','zh','fr'][i] === l));
+  doSearch();
+}
+</script>
+</body>
+</html>
